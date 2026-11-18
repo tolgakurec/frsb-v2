@@ -1,4 +1,3 @@
-
 import io
 import json
 import time
@@ -503,12 +502,25 @@ elif st.session_state.reading_mode:
                 while (distractors.length < 2) distractors.push("...");
                 const opts = [curr.ans, ...distractors.slice(0, 2)].sort(() => 0.5 - Math.random());
                 speakFrench(curr.fr);
-                let html = `<p style="color:#94a3b8;font-size:13px;">Soru ${{qStep + 1}} / ${{quizPool.length}}</p>` +
-                    `<div style="font-size:24px;font-weight:bold;color:#fbbf24;margin:12px 0;cursor:pointer;" onclick="speakFrench('${{curr.fr.replace(/'/g, "\\'")}}')">🔊 ${{curr.fr}}</div>`;
+                box.innerHTML = '';
+                const pInfo = document.createElement('p');
+                pInfo.style.cssText = 'color:#94a3b8;font-size:13px;';
+                pInfo.innerText = `Soru ${{qStep + 1}} / ${{quizPool.length}}`;
+                box.appendChild(pInfo);
+
+                const wordTitle = document.createElement('div');
+                wordTitle.style.cssText = 'font-size:24px;font-weight:bold;color:#fbbf24;margin:12px 0;cursor:pointer;';
+                wordTitle.innerText = '🔊 ' + curr.fr;
+                wordTitle.onclick = () => speakFrench(curr.fr);
+                box.appendChild(wordTitle);
+
                 opts.forEach(o => {{
-                    html += `<button class="quiz-opt" onclick="answerQuiz(this, '${{o.replace(/'/g, "\\'")}}', '${{curr.ans.replace(/'/g, "\\'")}}')">${{o}}</button>`;
+                    const btn = document.createElement('button');
+                    btn.className = 'quiz-opt';
+                    btn.innerText = o;
+                    btn.onclick = () => answerQuiz(btn, o, curr.ans);
+                    box.appendChild(btn);
                 }});
-                box.innerHTML = html;
             }}
             function answerQuiz(btn, chosen, correct) {{
                 if (chosen === correct) {{
@@ -866,7 +878,9 @@ else:
                     if st.button("✨ Gemini Vision ile Çözümle & Aktar", type="primary", use_container_width=True):
                         extracted = []
                         prog = st.progress(0)
+                        stat = st.empty()
                         for step, p_no in enumerate(range(p_range[0] - 1, p_range[1])):
+                            stat.text(f"Sayfa {step + 1} / {p_range[1] - p_range[0] + 1} Gemini Vision ile okunuyor...")
                             pix = pdf_doc[p_no].get_pixmap(dpi=130)
                             base_img = Image.open(io.BytesIO(pix.tobytes("jpeg"))).convert("RGB")
                             if split_spreads and (base_img.width / base_img.height) > 1.05:
@@ -893,7 +907,9 @@ else:
                 if upl_files and st.button("✨ Gemini Vision ile Çözümle & Aktar", type="primary", use_container_width=True):
                     extracted = []
                     prog = st.progress(0)
+                    stat = st.empty()
                     for idx_f, f in enumerate(upl_files):
+                        stat.text(f"Fotoğraf {idx_f + 1} / {len(upl_files)} Gemini Vision ile okunuyor...")
                         b_img = ImageOps.exif_transpose(Image.open(f)).convert("RGB")
                         if split_spreads and (b_img.width / b_img.height) > 1.05:
                             mid = b_img.width // 2
