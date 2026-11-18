@@ -146,6 +146,14 @@ def T(key):
         lang = "tr"
     return UI_TRANSLATIONS[lang].get(key, UI_TRANSLATIONS["tr"].get(key, key))
 
+def safe_int(val, default=0):
+    try:
+        if val is None or str(val).strip() == "":
+            return default
+        return int(float(str(val).strip()))
+    except Exception:
+        return default
+
 def sanitize_gemini_key(raw_key):
     if not raw_key:
         return ""
@@ -279,7 +287,7 @@ def get_library_with_covers():
             books_list.append({
                 "book_id": b_id,
                 "title": r.get("BookName", "İsimsiz"),
-                "page_count": r.get("PageCount", 0),
+                "page_count": safe_int(r.get("PageCount", 0)),
                 "date": date_val,
                 "row_idx": idx,
                 "cover_b64": ""
@@ -291,7 +299,7 @@ def get_library_with_covers():
             p_records = pages_sheet.get_all_records()
             cover_map = {}
             for pr in p_records:
-                if int(pr.get("PageNo", 0)) == 1:
+                if safe_int(pr.get("PageNo", 0)) == 1:
                     bid = str(pr.get("BookID", "")).strip()
                     if bid and bid not in cover_map:
                         cover_map[bid] = pr.get("ImageBase64", "")
@@ -316,7 +324,7 @@ def load_book_content(book_id):
                 except Exception:
                     boxes = []
                 pages.append({
-                    "page_no": int(r.get("PageNo", 0)),
+                    "page_no": safe_int(r.get("PageNo", 0)),
                     "img_b64": r.get("ImageBase64", ""),
                     "boxes": boxes
                 })
@@ -508,42 +516,48 @@ def call_gemini_vision_oneshot(base64_image, api_key):
 
     for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
         url = get_gemini_endpoint(model_name)
-        req = urllib.request.Request(
-            url,
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": clean_key,
-                "User-Agent": "Mozilla/5.0"
-            }
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=28) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    last_error = "Gemini boş yanıt döndürdü."
+        for retry in range(2):
+            req = urllib.request.Request(
+                url,
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": clean_key,
+                    "User-Agent": "Mozilla/5.0"
+                }
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=28) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        last_error = "Gemini boş yanıt döndürdü."
+                        break
+                    raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]").strip()
+                    if raw_text.startswith("```"):
+                        raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
+                        raw_text = re.sub(r"\n?```$", "", raw_text).strip()
+                    parsed = json.loads(raw_text)
+                    items = parsed if isinstance(parsed, list) else []
+                    if isinstance(parsed, dict):
+                        for v in parsed.values():
+                            if isinstance(v, list):
+                                items = v
+                                break
+                    if items:
+                        word_boxes = split_phrase_boxes_to_words(items)
+                        return word_boxes, None
+                    return [], None
+            except urllib.error.HTTPError as he:
+                if he.code == 429 and retry == 0:
+                    time.sleep(5)
                     continue
-                raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]").strip()
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
-                    raw_text = re.sub(r"\n?```$", "", raw_text).strip()
-                parsed = json.loads(raw_text)
-                items = parsed if isinstance(parsed, list) else []
-                if isinstance(parsed, dict):
-                    for v in parsed.values():
-                        if isinstance(v, list):
-                            items = v
-                            break
-                if items:
-                    word_boxes = split_phrase_boxes_to_words(items)
-                    return word_boxes, None
-                return [], None
-        except urllib.error.HTTPError as he:
-            err_msg = he.read().decode("utf-8", errors="ignore")
-            last_error = f"{model_name} HTTP {he.code}: {err_msg[:160]}"
-        except Exception as e:
-            last_error = f"{model_name} Bağlantı Hatası: {str(e)}"
+                err_msg = he.read().decode("utf-8", errors="ignore")
+                last_error = f"{model_name} HTTP {he.code}: {err_msg[:160]}"
+                break
+            except Exception as e:
+                last_error = f"{model_name} Bağlantı Hatası: {str(e)}"
+                break
 
     return None, last_error
 
