@@ -29,6 +29,14 @@ except ImportError:
 
 SHEET_ID = "1Ec0v2Oo-7BlILvb35TGgo5j-SOGivJwmf5xpF85oGoU"
 
+ACTIVE_FLASH_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash-lite"
+]
+
 LANGUAGES = {
     "tr": {"name": "Türkçe", "flag": "🇹🇷"},
     "en": {"name": "English", "flag": "🇬🇧"},
@@ -173,7 +181,7 @@ def get_admin_pin():
         return str(st.secrets["ADMIN_PIN"]).strip()
     return "1923"
 
-def get_gemini_endpoint(model_name="gemini-2.5-flash"):
+def get_gemini_endpoint(model_name="gemini-flash-latest"):
     proto = "ht" + "tps" + "://"
     domain = "generativelanguage" + "." + "googleapis" + "." + "com"
     return f"{proto}{domain}/v1beta/models/{model_name}:generateContent"
@@ -506,15 +514,14 @@ def call_gemini_vision_oneshot(base64_image, api_key):
             ]
         }],
         "generationConfig": {
-            "responseMimeType": "application/json",
-            "temperature": 0.1
+            "responseMimeType": "application/json"
         }
     }
 
     req_data = json.dumps(payload).encode("utf-8")
-    last_error = "Bilinmeyen API hatası"
+    errors_collected = []
 
-    for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+    for model_name in ACTIVE_FLASH_MODELS:
         url = get_gemini_endpoint(model_name)
         for retry in range(2):
             req = urllib.request.Request(
@@ -531,7 +538,7 @@ def call_gemini_vision_oneshot(base64_image, api_key):
                     data = json.loads(resp.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
                     if not candidates:
-                        last_error = "Gemini boş yanıt döndürdü."
+                        errors_collected.append(f"{model_name}: Boş yanıt")
                         break
                     raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]").strip()
                     if raw_text.startswith("```"):
@@ -553,13 +560,13 @@ def call_gemini_vision_oneshot(base64_image, api_key):
                     time.sleep(5)
                     continue
                 err_msg = he.read().decode("utf-8", errors="ignore")
-                last_error = f"{model_name} HTTP {he.code}: {err_msg[:160]}"
+                errors_collected.append(f"{model_name} HTTP {he.code}: {err_msg[:120]}")
                 break
             except Exception as e:
-                last_error = f"{model_name} Bağlantı Hatası: {str(e)}"
+                errors_collected.append(f"{model_name}: {str(e)[:120]}")
                 break
 
-    return None, last_error
+    return None, " | ".join(errors_collected[:2])
 
 def process_single_image(img):
     img_fixed = ImageOps.exif_transpose(img).convert("RGB")
@@ -614,22 +621,24 @@ def translate_legacy_page_via_gemini(boxes, target_lang):
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}
+        "generationConfig": {"responseMimeType": "application/json"}
     }
-    url = get_gemini_endpoint("gemini-2.5-flash")
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "User-Agent": "Mozilla/5.0"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            raw = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}").strip()
-            parsed = json.loads(raw)
-            return str(parsed.get("full_trans", full_fr)), parsed.get("dict", {})
-    except Exception:
-        return full_fr, {}
+    for model_name in ACTIVE_FLASH_MODELS:
+        url = get_gemini_endpoint(model_name)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key, "User-Agent": "Mozilla/5.0"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                raw = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}").strip()
+                parsed = json.loads(raw)
+                return str(parsed.get("full_trans", full_fr)), parsed.get("dict", {})
+        except Exception:
+            continue
+    return full_fr, {}
 
 def _prepare_page_task(page, target_lang):
     boxes = page.get("boxes", [])
